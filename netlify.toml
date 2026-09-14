@@ -1,9 +1,0 @@
-[functions]
-  directory = "netlify/functions"
-
-[[plugins]]
-  package = "@netlify/plugin-functions-install-core"
-
-# Schedule the function to run every 2 minutes
-[[functions."check-orders"]]
-  schedule = "*/2 * * * *"
