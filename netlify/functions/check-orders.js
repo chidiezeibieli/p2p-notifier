@@ -7,50 +7,52 @@ const TG_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const TG_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
 
 function sign(timestamp, method, requestPath, body = "") {
-  const message = `\( {timestamp} \){method.toUpperCase()}\( {requestPath} \){body}`;
+  const message = timestamp + method.toUpperCase() + requestPath + body;
   return crypto.createHmac("sha256", SECRET_KEY).update(message).digest("base64");
 }
 
 async function bitgetRequest(method, path, params = {}) {
   const timestamp = Date.now().toString();
-  const query = new URLSearchParams(params).toString();
-  const requestPath = query ? `\( {path}? \){query}` : path;
+  
+  let requestPath = path;
+  const queryString = new URLSearchParams(params).toString();
+  if (queryString) {
+    requestPath = path + "?" + queryString;
+  }
+
   const signature = sign(timestamp, method, requestPath);
 
-  const res = await fetch(`https://api.bitget.com${requestPath}`, {
-    method,
+  const url = "https://api.bitget.com" + requestPath;
+
+  const res = await fetch(url, {
+    method: method,
     headers: {
       "ACCESS-KEY": API_KEY,
       "ACCESS-SIGN": signature,
       "ACCESS-TIMESTAMP": timestamp,
       "ACCESS-PASSPHRASE": PASSPHRASE,
       "Content-Type": "application/json",
-      locale: "en-US",
-    },
+      "locale": "en-US"
+    }
   });
 
   return res.json();
 }
 
 async function sendTelegram(text) {
-  try {
-    await fetch(`https://api.telegram.org/bot${TG_TOKEN}/sendMessage`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        chat_id: TG_CHAT_ID,
-        text: text,
-        parse_mode: "HTML",
-      }),
-    });
-  } catch (err) {
-    console.log("Telegram error:", err.message);
-  }
+  await fetch("https://api.telegram.org/bot" + TG_TOKEN + "/sendMessage", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      chat_id: TG_CHAT_ID,
+      text: text,
+      parse_mode: "HTML"
+    })
+  });
 }
 
 exports.handler = async function () {
   try {
-    // Always send a heartbeat so we know the function is running
     await sendTelegram("🔄 Function is running...");
 
     const end = Date.now();
@@ -60,15 +62,15 @@ exports.handler = async function () {
       startTime: start.toString(),
       endTime: end.toString(),
       limit: "20",
-      status: "pending_pay",
+      status: "pending_pay"
     });
 
     if (data.code !== "00000") {
-      await sendTelegram(`⚠️ Bitget Error:\n${data.msg || JSON.stringify(data)}`);
+      await sendTelegram("⚠️ Bitget Error: " + (data.msg || JSON.stringify(data)));
       return { statusCode: 200, body: "Bitget error" };
     }
 
-    const orders = data.data?.orderList || [];
+    const orders = data.data && data.data.orderList ? data.data.orderList : [];
 
     if (orders.length === 0) {
       await sendTelegram("✅ No new pending orders right now.");
@@ -76,23 +78,20 @@ exports.handler = async function () {
     }
 
     for (const order of orders) {
-      const message = `
-🔔 <b>New P2P Order</b>
-
-Order: <code>${order.orderNo || order.orderId}</code>
-Side: ${order.side?.toUpperCase()}
-Amount: ${order.count} ${order.coin}
-Fiat: ${order.amount} ${order.fiat}
-Price: ${order.price}
-Status: ${order.status}
-      `.trim();
+      const message = "🔔 New P2P Order\n\n" +
+        "Order: " + (order.orderNo || order.orderId) + "\n" +
+        "Side: " + (order.side || "").toUpperCase() + "\n" +
+        "Amount: " + order.count + " " + order.coin + "\n" +
+        "Fiat: " + order.amount + " " + order.fiat + "\n" +
+        "Price: " + order.price + "\n" +
+        "Status: " + order.status;
 
       await sendTelegram(message);
     }
 
-    return { statusCode: 200, body: `Notified ${orders.length} orders` };
+    return { statusCode: 200, body: "Done" };
   } catch (err) {
-    await sendTelegram(`❌ Function crashed:\n${err.message}`);
+    await sendTelegram("❌ Function crashed: " + err.message);
     return { statusCode: 500, body: err.message };
   }
 };
