@@ -2,4 +2,4 @@
   directory = "netlify/functions"
 
 [functions.check-orders]
-  schedule = "*/60 * * * *"
+  schedule = "*/7 * * * *"
