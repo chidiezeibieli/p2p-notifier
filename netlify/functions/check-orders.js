@@ -63,7 +63,6 @@ async function setSetting(key, value) {
 }
 
 async function getMarketPrices() {
-  // Get top buy ads (people selling USDT - highest prices first usually)
   const buyData = await bitgetRequest("GET", "/api/v3/p2p/ad-list", {
     token: "USDT",
     fiat: "NGN",
@@ -72,7 +71,6 @@ async function getMarketPrices() {
     limit: "10"
   });
 
-  // Get top sell ads (people buying USDT - lowest prices)
   const sellData = await bitgetRequest("GET", "/api/v3/p2p/ad-list", {
     token: "USDT",
     fiat: "NGN",
@@ -91,19 +89,21 @@ async function getMarketPrices() {
     buy: {
       highest: buyPrices.length ? Math.max(...buyPrices) : null,
       lowest: buyPrices.length ? Math.min(...buyPrices) : null,
-      average: buyPrices.length ? (buyPrices.reduce((a, b) => a + b, 0) / buyPrices.length).toFixed(2) : null
+      average: buyPrices.length ? (buyPrices.reduce((a, b) => a + b, 0) / buyPrices.length).toFixed(2) : null,
+      raw: buyData
     },
     sell: {
       highest: sellPrices.length ? Math.max(...sellPrices) : null,
       lowest: sellPrices.length ? Math.min(...sellPrices) : null,
-      average: sellPrices.length ? (sellPrices.reduce((a, b) => a + b, 0) / sellPrices.length).toFixed(2) : null
+      average: sellPrices.length ? (sellPrices.reduce((a, b) => a + b, 0) / sellPrices.length).toFixed(2) : null,
+      raw: sellData
     }
   };
 }
 
 async function checkCommands() {
   try {
-    const res = await fetch("https://api.telegram.org/bot" + TG_TOKEN + "/getUpdates?offset=-10");
+    const res = await fetch("https://api.telegram.org/bot" + TG_TOKEN + "/getUpdates?offset=-15");
     const data = await res.json();
     if (!data.ok || !data.result) return;
 
@@ -115,6 +115,27 @@ async function checkCommands() {
       const text = msg.text.trim();
       const lower = text.toLowerCase();
 
+      // Check if we are waiting for a price
+      const waiting = await getSetting("waitingFor");
+
+      if (waiting === "buy" || waiting === "sell") {
+        const price = parseFloat(text);
+        if (!isNaN(price) && price > 0) {
+          if (waiting === "buy") {
+            await setSetting("buyTarget", price);
+            await sendTelegram("✅ Buy alert set: I will notify you when the buy price drops below ₦" + price);
+          } else {
+            await setSetting("sellTarget", price);
+            await sendTelegram("✅ Sell alert set: I will notify you when the sell price rises above ₦" + price);
+          }
+          await setSetting("waitingFor", "none");
+        } else {
+          await sendTelegram("Please send a valid number (example: 1650)");
+        }
+        continue;
+      }
+
+      // Normal commands
       if (lower === "/on") {
         await setSetting("enabled", "true");
         await sendTelegram("✅ Notifications turned <b>ON</b>");
@@ -127,35 +148,36 @@ async function checkCommands() {
         const enabled = await getSetting("enabled", "true");
         const buyTarget = await getSetting("buyTarget");
         const sellTarget = await getSetting("sellTarget");
-        let msg = enabled === "true" ? "✅ Status: <b>ON</b>" : "⏸ Status: <b>OFF</b>";
-        if (buyTarget) msg += "\nBuy alert below: ₦" + buyTarget;
-        if (sellTarget) msg += "\nSell alert above: ₦" + sellTarget;
-        await sendTelegram(msg);
+        let reply = enabled === "true" ? "✅ Status: <b>ON</b>" : "⏸ Status: <b>OFF</b>";
+        if (buyTarget) reply += "\nBuy alert below: ₦" + buyTarget;
+        if (sellTarget) reply += "\nSell alert above: ₦" + sellTarget;
+        await sendTelegram(reply);
       }
       else if (lower === "/price") {
         const prices = await getMarketPrices();
-        const msg = `📊 <b>USDT/NGN Market</b>
+        let reply = "📊 <b>USDT/NGN Market</b>\n\n";
+        reply += "<b>Buy side</b> (you sell USDT):\n";
+        reply += "Highest: ₦" + (prices.buy.highest || "N/A") + "\n";
+        reply += "Lowest: ₦" + (prices.buy.lowest || "N/A") + "\n";
+        reply += "Average: ₦" + (prices.buy.average || "N/A") + "\n\n";
+        reply += "<b>Sell side</b> (you buy USDT):\n";
+        reply += "Highest: ₦" + (prices.sell.highest || "N/A") + "\n";
+        reply += "Lowest: ₦" + (prices.sell.lowest || "N/A") + "\n";
+        reply += "Average: ₦" + (prices.sell.average || "N/A");
 
-<b>Buy side</b> (you sell USDT):
-Highest: ₦${prices.buy.highest || "N/A"}
-Lowest: ₦${prices.buy.lowest || "N/A"}
-Average: ₦${prices.buy.average || "N/A"}
-
-<b>Sell side</b> (you buy USDT):
-Highest: ₦${prices.sell.highest || "N/A"}
-Lowest: ₦${prices.sell.lowest || "N/A"}
-Average: ₦${prices.sell.average || "N/A"}`;
-        await sendTelegram(msg);
+        // Show error if both are empty
+        if (!prices.buy.highest && !prices.sell.highest) {
+          reply += "\n\n⚠️ Could not fetch prices. Bitget response:\n" + JSON.stringify(prices.buy.raw).slice(0, 300);
+        }
+        await sendTelegram(reply);
       }
-      else if (lower.startsWith("/setbuy ")) {
-        const price = text.split(" ")[1];
-        await setSetting("buyTarget", price);
-        await sendTelegram("✅ Buy alert set: notify when price drops below ₦" + price);
+      else if (lower === "/setbuy") {
+        await setSetting("waitingFor", "buy");
+        await sendTelegram("Please send the buy price you want (example: 1600)");
       }
-      else if (lower.startsWith("/setsell ")) {
-        const price = text.split(" ")[1];
-        await setSetting("sellTarget", price);
-        await sendTelegram("✅ Sell alert set: notify when price rises above ₦" + price);
+      else if (lower === "/setsell") {
+        await setSetting("waitingFor", "sell");
+        await sendTelegram("Please send the sell price you want (example: 1700)");
       }
       else if (lower === "/help") {
         await sendTelegram(`📖 <b>Commands</b>
@@ -164,8 +186,8 @@ Average: ₦${prices.sell.average || "N/A"}`;
 /off - Turn notifications off
 /status - Check current status
 /price - Show current USDT/NGN prices
-/setbuy 1600 - Alert when buy price drops below 1600
-/setsell 1700 - Alert when sell price rises above 1700
+/setbuy - Set buy price alert
+/setsell - Set sell price alert
 /help - Show this message`);
       }
     }
@@ -176,7 +198,6 @@ Average: ₦${prices.sell.average || "N/A"}`;
 
 exports.handler = async function () {
   try {
-    // Handle commands first
     await checkCommands();
 
     const enabled = await getSetting("enabled", "true");
@@ -184,7 +205,7 @@ exports.handler = async function () {
       return { statusCode: 200, body: "Notifier is OFF" };
     }
 
-    // === Check new pending orders ===
+    // Check new pending orders
     const end = Date.now();
     const start = end - 24 * 60 * 60 * 1000;
 
@@ -209,7 +230,7 @@ exports.handler = async function () {
       }
     }
 
-    // === Check price alerts ===
+    // Price alerts
     const prices = await getMarketPrices();
     const buyTarget = await getSetting("buyTarget");
     const sellTarget = await getSetting("sellTarget");
