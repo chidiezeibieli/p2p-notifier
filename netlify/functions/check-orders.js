@@ -63,24 +63,29 @@ async function setSetting(key, value) {
 }
 
 async function getMarketPrices() {
-  const buyData = await bitgetRequest("GET", "/api/v3/p2p/ad-list", {
-    token: "USDT",
+  // Classic Account compatible endpoint
+  const buyData = await bitgetRequest("GET", "/api/v2/p2p/advList", {
+    coin: "USDT",
     fiat: "NGN",
     side: "buy",
-    pageNum: "1",
-    limit: "10"
+    status: "online",
+    sourceType: "competitior",
+    limit: "20",
+    language: "en-US"
   });
 
-  const sellData = await bitgetRequest("GET", "/api/v3/p2p/ad-list", {
-    token: "USDT",
+  const sellData = await bitgetRequest("GET", "/api/v2/p2p/advList", {
+    coin: "USDT",
     fiat: "NGN",
     side: "sell",
-    pageNum: "1",
-    limit: "10"
+    status: "online",
+    sourceType: "competitior",
+    limit: "20",
+    language: "en-US"
   });
 
-  const buyAds = buyData.code === "00000" ? (buyData.data || []) : [];
-  const sellAds = sellData.code === "00000" ? (sellData.data || []) : [];
+  const buyAds = (buyData.code === "00000" && buyData.data && buyData.data.advList) ? buyData.data.advList : [];
+  const sellAds = (sellData.code === "00000" && sellData.data && sellData.data.advList) ? sellData.data.advList : [];
 
   const buyPrices = buyAds.map(a => parseFloat(a.price)).filter(p => !isNaN(p));
   const sellPrices = sellAds.map(a => parseFloat(a.price)).filter(p => !isNaN(p));
@@ -165,9 +170,8 @@ async function checkCommands() {
         reply += "Lowest: ₦" + (prices.sell.lowest || "N/A") + "\n";
         reply += "Average: ₦" + (prices.sell.average || "N/A");
 
-        // Show error if both are empty
         if (!prices.buy.highest && !prices.sell.highest) {
-          reply += "\n\n⚠️ Could not fetch prices. Bitget response:\n" + JSON.stringify(prices.buy.raw).slice(0, 300);
+          reply += "\n\n⚠️ Could not fetch prices. Bitget response:\n" + JSON.stringify(prices.buy.raw).slice(0, 400);
         }
         await sendTelegram(reply);
       }
