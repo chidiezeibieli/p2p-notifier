@@ -86,31 +86,24 @@ async function getMarketPrices() {
   const buyAds = (buyData.code === "00000" && buyData.data && buyData.data.advList) ? buyData.data.advList : [];
   const sellAds = (sellData.code === "00000" && sellData.data && sellData.data.advList) ? sellData.data.advList : [];
 
-  // Sort Buy side (merchants buying USDT) - Highest price first (best for you to sell)
   const sortedBuy = buyAds
     .map(a => ({ price: parseFloat(a.price), name: a.nickName || a.merchantName || "Merchant" }))
     .filter(a => !isNaN(a.price))
     .sort((a, b) => b.price - a.price)
     .slice(0, 10);
 
-  // Sort Sell side (merchants selling USDT) - Lowest price first (best for you to buy)
   const sortedSell = sellAds
     .map(a => ({ price: parseFloat(a.price), name: a.nickName || a.merchantName || "Merchant" }))
     .filter(a => !isNaN(a.price))
     .sort((a, b) => a.price - b.price)
     .slice(0, 10);
 
-  return {
-    buy: sortedBuy,
-    sell: sortedSell,
-    rawBuy: buyData,
-    rawSell: sellData
-  };
+  return { buy: sortedBuy, sell: sortedSell };
 }
 
 async function checkCommands() {
   try {
-    const res = await fetch("https://api.telegram.org/bot" + TG_TOKEN + "/getUpdates?offset=-15");
+    const res = await fetch("https://api.telegram.org/bot" + TG_TOKEN + "/getUpdates?offset=-20");
     const data = await res.json();
     if (!data.ok || !data.result) return;
 
@@ -129,10 +122,10 @@ async function checkCommands() {
         if (!isNaN(price) && price > 0) {
           if (waiting === "buy") {
             await setSetting("buyTarget", price);
-            await sendTelegram("✅ Buy alert set: I will notify you when the buy price drops below ₦" + price);
+            await sendTelegram("✅ Buy alert set: notify when price drops below ₦" + price);
           } else {
             await setSetting("sellTarget", price);
-            await sendTelegram("✅ Sell alert set: I will notify you when the sell price rises above ₦" + price);
+            await sendTelegram("✅ Sell alert set: notify when price rises above ₦" + price);
           }
           await setSetting("waitingFor", "none");
         } else {
@@ -144,12 +137,10 @@ async function checkCommands() {
       if (lower === "/on") {
         await setSetting("enabled", "true");
         await sendTelegram("✅ Notifications turned <b>ON</b>");
-      } 
-      else if (lower === "/off") {
+      } else if (lower === "/off") {
         await setSetting("enabled", "false");
         await sendTelegram("⏸ Notifications turned <b>OFF</b>");
-      } 
-      else if (lower === "/status") {
+      } else if (lower === "/status") {
         const enabled = await getSetting("enabled", "true");
         const buyTarget = await getSetting("buyTarget");
         const sellTarget = await getSetting("sellTarget");
@@ -157,45 +148,26 @@ async function checkCommands() {
         if (buyTarget) reply += "\nBuy alert below: ₦" + buyTarget;
         if (sellTarget) reply += "\nSell alert above: ₦" + sellTarget;
         await sendTelegram(reply);
-      }
-      else if (lower === "/price") {
+      } else if (lower === "/price") {
         const prices = await getMarketPrices();
-
         let reply = "📊 <b>USDT/NGN Top 10</b>\n\n";
 
         reply += "<b>Best places to SELL USDT</b> (Highest prices):\n";
-        if (prices.buy.length === 0) {
-          reply += "No data\n";
-        } else {
-          prices.buy.forEach((ad, i) => {
-            reply += (i + 1) + ". ₦" + ad.price + " — " + ad.name + "\n";
-          });
-        }
+        if (prices.buy.length === 0) reply += "No data\n";
+        else prices.buy.forEach((ad, i) => reply += (i + 1) + ". ₦" + ad.price + " — " + ad.name + "\n");
 
         reply += "\n<b>Best places to BUY USDT</b> (Lowest prices):\n";
-        if (prices.sell.length === 0) {
-          reply += "No data\n";
-        } else {
-          prices.sell.forEach((ad, i) => {
-            reply += (i + 1) + ". ₦" + ad.price + " — " + ad.name + "\n";
-          });
-        }
-
-        if (prices.buy.length === 0 && prices.sell.length === 0) {
-          reply += "\n⚠️ Bitget response:\n" + JSON.stringify(prices.rawBuy).slice(0, 300);
-        }
+        if (prices.sell.length === 0) reply += "No data\n";
+        else prices.sell.forEach((ad, i) => reply += (i + 1) + ". ₦" + ad.price + " — " + ad.name + "\n");
 
         await sendTelegram(reply);
-      }
-      else if (lower === "/setbuy") {
+      } else if (lower === "/setbuy") {
         await setSetting("waitingFor", "buy");
         await sendTelegram("Please send the buy price you want (example: 1600)");
-      }
-      else if (lower === "/setsell") {
+      } else if (lower === "/setsell") {
         await setSetting("waitingFor", "sell");
         await sendTelegram("Please send the sell price you want (example: 1700)");
-      }
-      else if (lower === "/help") {
+      } else if (lower === "/help") {
         await sendTelegram(`📖 <b>Commands</b>
 
 /on - Turn notifications on
@@ -221,21 +193,27 @@ exports.handler = async function () {
       return { statusCode: 200, body: "Notifier is OFF" };
     }
 
-    // Check new pending orders
+    // ===== Check pending orders (more reliable) =====
     const end = Date.now();
-    const start = end - 24 * 60 * 60 * 1000;
+    const start = end - 48 * 60 * 60 * 1000; // last 48 hours
 
     const orderData = await bitgetRequest("GET", "/api/v2/p2p/orderList", {
       startTime: start.toString(),
       endTime: end.toString(),
-      limit: "20",
-      status: "pending_pay"
+      limit: "50"
     });
 
     if (orderData.code === "00000") {
-      const orders = orderData.data && orderData.data.orderList ? orderData.data.orderList : [];
-      for (const order of orders) {
-        const message = "🔔 <b>New P2P Order</b>\n\n" +
+      const allOrders = orderData.data && orderData.data.orderList ? orderData.data.orderList : [];
+
+      // Filter for pending statuses
+      const pendingOrders = allOrders.filter(o => {
+        const status = (o.status || "").toLowerCase();
+        return status.includes("pending") || status === "pending_pay" || status === "paid" || status === "unpaid";
+      });
+
+      for (const order of pendingOrders) {
+        const message = "🔔 <b>Pending P2P Order</b>\n\n" +
           "Order: <code>" + (order.orderNo || order.orderId) + "</code>\n" +
           "Side: " + (order.side || "").toUpperCase() + "\n" +
           "Amount: " + order.count + " " + order.coin + "\n" +
@@ -246,17 +224,17 @@ exports.handler = async function () {
       }
     }
 
-    // Price alerts
+    // ===== Price alerts =====
     const prices = await getMarketPrices();
     const buyTarget = await getSetting("buyTarget");
     const sellTarget = await getSetting("sellTarget");
 
     if (buyTarget && prices.buy.length > 0 && prices.buy[0].price <= parseFloat(buyTarget)) {
-      await sendTelegram("📉 <b>Buy Price Alert!</b>\n\nBest sell price is now ₦" + prices.buy[0].price + "\n(Your target was ₦" + buyTarget + ")");
+      await sendTelegram("📉 <b>Buy Price Alert!</b>\nBest sell price is now ₦" + prices.buy[0].price);
     }
 
     if (sellTarget && prices.sell.length > 0 && prices.sell[0].price >= parseFloat(sellTarget)) {
-      await sendTelegram("📈 <b>Sell Price Alert!</b>\n\nBest buy price is now ₦" + prices.sell[0].price + "\n(Your target was ₦" + sellTarget + ")");
+      await sendTelegram("📈 <b>Sell Price Alert!</b>\nBest buy price is now ₦" + prices.sell[0].price);
     }
 
     return { statusCode: 200, body: "Done" };
