@@ -63,7 +63,6 @@ async function setSetting(key, value) {
 }
 
 async function getMarketPrices() {
-  // Classic Account compatible endpoint
   const buyData = await bitgetRequest("GET", "/api/v2/p2p/advList", {
     coin: "USDT",
     fiat: "NGN",
@@ -87,22 +86,25 @@ async function getMarketPrices() {
   const buyAds = (buyData.code === "00000" && buyData.data && buyData.data.advList) ? buyData.data.advList : [];
   const sellAds = (sellData.code === "00000" && sellData.data && sellData.data.advList) ? sellData.data.advList : [];
 
-  const buyPrices = buyAds.map(a => parseFloat(a.price)).filter(p => !isNaN(p));
-  const sellPrices = sellAds.map(a => parseFloat(a.price)).filter(p => !isNaN(p));
+  // Sort Buy side (merchants buying USDT) - Highest price first (best for you to sell)
+  const sortedBuy = buyAds
+    .map(a => ({ price: parseFloat(a.price), name: a.nickName || a.merchantName || "Merchant" }))
+    .filter(a => !isNaN(a.price))
+    .sort((a, b) => b.price - a.price)
+    .slice(0, 10);
+
+  // Sort Sell side (merchants selling USDT) - Lowest price first (best for you to buy)
+  const sortedSell = sellAds
+    .map(a => ({ price: parseFloat(a.price), name: a.nickName || a.merchantName || "Merchant" }))
+    .filter(a => !isNaN(a.price))
+    .sort((a, b) => a.price - b.price)
+    .slice(0, 10);
 
   return {
-    buy: {
-      highest: buyPrices.length ? Math.max(...buyPrices) : null,
-      lowest: buyPrices.length ? Math.min(...buyPrices) : null,
-      average: buyPrices.length ? (buyPrices.reduce((a, b) => a + b, 0) / buyPrices.length).toFixed(2) : null,
-      raw: buyData
-    },
-    sell: {
-      highest: sellPrices.length ? Math.max(...sellPrices) : null,
-      lowest: sellPrices.length ? Math.min(...sellPrices) : null,
-      average: sellPrices.length ? (sellPrices.reduce((a, b) => a + b, 0) / sellPrices.length).toFixed(2) : null,
-      raw: sellData
-    }
+    buy: sortedBuy,
+    sell: sortedSell,
+    rawBuy: buyData,
+    rawSell: sellData
   };
 }
 
@@ -120,7 +122,6 @@ async function checkCommands() {
       const text = msg.text.trim();
       const lower = text.toLowerCase();
 
-      // Check if we are waiting for a price
       const waiting = await getSetting("waitingFor");
 
       if (waiting === "buy" || waiting === "sell") {
@@ -140,7 +141,6 @@ async function checkCommands() {
         continue;
       }
 
-      // Normal commands
       if (lower === "/on") {
         await setSetting("enabled", "true");
         await sendTelegram("✅ Notifications turned <b>ON</b>");
@@ -160,19 +160,31 @@ async function checkCommands() {
       }
       else if (lower === "/price") {
         const prices = await getMarketPrices();
-        let reply = "📊 <b>USDT/NGN Market</b>\n\n";
-        reply += "<b>Buy side</b> (you sell USDT):\n";
-        reply += "Highest: ₦" + (prices.buy.highest || "N/A") + "\n";
-        reply += "Lowest: ₦" + (prices.buy.lowest || "N/A") + "\n";
-        reply += "Average: ₦" + (prices.buy.average || "N/A") + "\n\n";
-        reply += "<b>Sell side</b> (you buy USDT):\n";
-        reply += "Highest: ₦" + (prices.sell.highest || "N/A") + "\n";
-        reply += "Lowest: ₦" + (prices.sell.lowest || "N/A") + "\n";
-        reply += "Average: ₦" + (prices.sell.average || "N/A");
 
-        if (!prices.buy.highest && !prices.sell.highest) {
-          reply += "\n\n⚠️ Could not fetch prices. Bitget response:\n" + JSON.stringify(prices.buy.raw).slice(0, 400);
+        let reply = "📊 <b>USDT/NGN Top 10</b>\n\n";
+
+        reply += "<b>Best places to SELL USDT</b> (Highest prices):\n";
+        if (prices.buy.length === 0) {
+          reply += "No data\n";
+        } else {
+          prices.buy.forEach((ad, i) => {
+            reply += (i + 1) + ". ₦" + ad.price + " — " + ad.name + "\n";
+          });
         }
+
+        reply += "\n<b>Best places to BUY USDT</b> (Lowest prices):\n";
+        if (prices.sell.length === 0) {
+          reply += "No data\n";
+        } else {
+          prices.sell.forEach((ad, i) => {
+            reply += (i + 1) + ". ₦" + ad.price + " — " + ad.name + "\n";
+          });
+        }
+
+        if (prices.buy.length === 0 && prices.sell.length === 0) {
+          reply += "\n⚠️ Bitget response:\n" + JSON.stringify(prices.rawBuy).slice(0, 300);
+        }
+
         await sendTelegram(reply);
       }
       else if (lower === "/setbuy") {
@@ -189,7 +201,7 @@ async function checkCommands() {
 /on - Turn notifications on
 /off - Turn notifications off
 /status - Check current status
-/price - Show current USDT/NGN prices
+/price - Show Top 10 buy & sell prices
 /setbuy - Set buy price alert
 /setsell - Set sell price alert
 /help - Show this message`);
@@ -239,12 +251,12 @@ exports.handler = async function () {
     const buyTarget = await getSetting("buyTarget");
     const sellTarget = await getSetting("sellTarget");
 
-    if (buyTarget && prices.buy.lowest && prices.buy.lowest <= parseFloat(buyTarget)) {
-      await sendTelegram("📉 <b>Buy Price Alert!</b>\n\nLowest buy price is now ₦" + prices.buy.lowest + "\n(Your target was ₦" + buyTarget + ")");
+    if (buyTarget && prices.buy.length > 0 && prices.buy[0].price <= parseFloat(buyTarget)) {
+      await sendTelegram("📉 <b>Buy Price Alert!</b>\n\nBest sell price is now ₦" + prices.buy[0].price + "\n(Your target was ₦" + buyTarget + ")");
     }
 
-    if (sellTarget && prices.sell.highest && prices.sell.highest >= parseFloat(sellTarget)) {
-      await sendTelegram("📈 <b>Sell Price Alert!</b>\n\nHighest sell price is now ₦" + prices.sell.highest + "\n(Your target was ₦" + sellTarget + ")");
+    if (sellTarget && prices.sell.length > 0 && prices.sell[0].price >= parseFloat(sellTarget)) {
+      await sendTelegram("📈 <b>Sell Price Alert!</b>\n\nBest buy price is now ₦" + prices.sell[0].price + "\n(Your target was ₦" + sellTarget + ")");
     }
 
     return { statusCode: 200, body: "Done" };
